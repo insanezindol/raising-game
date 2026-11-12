@@ -20,7 +20,7 @@ const LIGHT = {
   day: ['#bfe3f7', 1.5, '#fff4e0', 2.2],
   dusk: ['#f7b98b', 1.1, '#ffb070', 1.6],
   night: ['#232a52', 0.55, '#8fa3ff', 0.5],
-  dark: ['#141a36', 0.3, '#7f93f0', 0.3],
+  dark: ['#141a36', 0.45, '#7f93f0', 0.35],
 } as const
 
 export class World {

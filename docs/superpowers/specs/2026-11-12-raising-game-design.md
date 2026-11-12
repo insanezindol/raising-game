@@ -46,28 +46,27 @@
 ## 4. 인증과 복구키
 
 - ID: 영문 소문자·숫자·`_`, 4~20자. 비밀번호: 8자 이상. 그 외 정보는 받지 않는다.
-- Supabase Auth 설정에서 "Confirm email"을 끈다.
-- 가입 시 클라이언트가 128비트 난수 복구키(`XXXX-XXXX-XXXX-XXXX-...`)를 만들어 **한 번만** 보여준다.
-  "적어 두었어요" 체크를 해야 다음으로 넘어간다. DB에는 SHA-256 해시만 저장한다.
+- 가입은 서버 함수 `api/signup`이 처리한다. 계정을 만들고(메일 확인 없이 바로 활성화) 120비트 난수 복구키를
+  생성해 SHA-256 해시만 저장한 뒤, 원문을 **한 번만** 돌려준다. Supabase의 "Confirm email" 설정은 바꿀 필요가 없다.
+- 화면은 복구키를 한 번 보여주고, "적어 두었어요"를 체크해야 다음으로 넘어간다.
 - 복구: ID + 복구키 + 새 비밀번호 → `api/recover` → 해시 비교 → 비밀번호 변경 → 새 복구키 발급·반환.
-- 시도 제한: ID당 15분에 5회 실패 시 15분 잠금. 실패 응답은 ID 존재 여부를 드러내지 않는다.
+- 시도 제한: ID당 5회 틀리면 15분 잠금. 실패 응답은 ID 존재 여부와 잠금 여부를 드러내지 않는다.
 
 ## 5. 데이터 모델
 
 ```
-profiles      user_id PK(auth.users), username UNIQUE, created_at
-recovery_keys user_id PK, key_hash, failed_attempts, locked_until
-pets          id PK, user_id, species, name, personality,
-              born_at, lifespan_days, died_at, death_cause,
-              stats jsonb, sick_since, last_tick_at
-diary         id PK, pet_id, kind, text, created_at
+accounts  user_id PK(auth.users), username UNIQUE, key_hash, failed_attempts, locked_until
+pets      id PK, user_id, species, name, born_at, died_at, death_cause, state jsonb, updated_at
+diary     id PK, user_id, pet_id, kind, body, created_at
 ```
 
-- RLS: `profiles`, `pets`, `diary`는 본인 행만 읽기/쓰기.
-  `recovery_keys`는 본인 행 insert만 허용, select/update는 service-role만.
+- `accounts`는 RLS를 켜고 정책을 두지 않는다. 서버 함수(service-role)만 읽고 쓴다.
+- `pets`, `diary`는 본인 행만 읽기/쓰기.
 - 살아있는 펫은 사용자당 1마리(`died_at IS NULL` 부분 유니크 인덱스).
-- `pets.last_tick_at`은 트리거가 서버 `now()`로 덮어쓴다. 클라이언트가 시각을 조작해 저장할 수 없다.
-- 서버 시각은 RPC `server_now()`로 받는다.
+- 스탯·수명·성격 카운트는 모두 `pets.state`에 들어 있다.
+- 서버 시각은 RPC `server_now()`로 받아 기기 시계가 틀려도 게임 시간이 어긋나지 않게 한다.
+  다만 상태 자체를 브라우저가 계산해 저장하므로, 작정하고 조작하는 것은 막지 못한다(11절 참고).
+- 저장 실패에 대비해 브라우저에 사본을 두되, 서버의 `updated_at`보다 새로울 때만 쓴다(여러 기기 사용 대비).
 
 ## 6. 시뮬레이션
 
@@ -85,8 +84,8 @@ diary         id PK, pet_id, kind, text, created_at
 ## 7. 플레이
 
 **항상 켜져 있는 것**
-- 펫이 방 안을 스스로 돌아다니고, 졸고, 창밖을 보고, 포인터를 눈으로 따라온다.
-- 드래그로 쓰다듬기(부위별 반응), 이름 버튼으로 부르면 달려온다.
+- 펫이 방 안을 스스로 돌아다니고, 기분이 좋으면 춤추고, 필요한 게 있으면 사람을 보며 말풍선으로 알린다.
+- 드래그로 쓰다듬기, 톡 누르면 깡충 뛰기, 바닥을 누르면 그쪽으로 달려온다.
 - 현실 시각에 맞춘 낮/밤 조명. 밤에는 침대에서 잔다.
 
 **돌봄 행동**
@@ -97,10 +96,10 @@ diary         id PK, pet_id, kind, text, created_at
 | 산책 | 공원 씬으로 이동, 탭한 곳으로 함께 걸음 | 즐거움↑, 건강↑, 청결↓ |
 | 목욕 | 문질러 거품 내고 헹구기 | 청결↑ |
 | 재우기 | 불 끄기 | 체력↑ |
-| 병원 | 진찰 연출 후 치료 | 질병 치료 |
+| 병원 | 화면 전환 후 결과 안내(별도 병원 씬 없음) | 질병 치료 |
 | 치우기 | 배변·말썽 흔적을 탭해 치움 | 청결↑ |
 
-**돌발 상황**: 배탈, 감기, 쓰레기통 뒤집기, 배변, 밤에 낑낑대기.
+**돌발 상황**: 배탈, 감기, 쓰레기통 뒤집기, 배변.
 
 **추억 일기**: 입양, 첫 산책, 첫 병원, 성장 단계 변화, 100번째 쓰다듬기 등을 자동 기록.
 사망 시 일기와 함께 추모 앨범에 남는다.
@@ -137,8 +136,10 @@ diary         id PK, pet_id, kind, text, created_at
 
 ## 12. 사용자가 해 줄 일
 
-1. Supabase anon 키 전달.
-2. service-role 키를 Vercel 환경변수 `SUPABASE_SERVICE_ROLE_KEY`에 직접 입력.
-3. `supabase/schema.sql`을 대시보드 SQL Editor에서 실행.
-4. Supabase Auth에서 "Confirm email" 끄기.
-5. Vercel 대시보드에서 `insanezindol/raising-game` 저장소 Import.
+1. `supabase/schema.sql`을 대시보드 SQL Editor에서 실행.
+2. Vercel 대시보드에서 `insanezindol/raising-game` 저장소 Import.
+3. Vercel 환경변수 등록: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`.
+
+## 13. 처음 설계에서 빠진 것
+
+창밖 보기, 포인터를 눈으로 따라오기, 부위별 쓰다듬기 반응, 밤에 낑낑대기, 별도 병원 씬.

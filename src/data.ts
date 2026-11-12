@@ -77,16 +77,20 @@ export async function syncClock() {
 
 // ── 펫 ───────────────────────────────────────────────
 
-// 서버 저장이 실패해도 진행이 사라지지 않도록, 저장 전 상태를 여기에 먼저 남긴다
+// 서버 저장이 실패해도 진행이 사라지지 않도록, 저장 전 상태를 여기에 먼저 남긴다.
+// 다른 기기에서 더 나중에 저장했다면 이 사본은 낡은 것이므로 시각을 함께 적어 비교한다.
+type Pending = { pet: Pet; at: number }
 const pendingKey = (id: string) => `pending:${id}`
 
 export async function loadPet(): Promise<PetRow | null> {
   if (LOCAL) return read<PetRow | null>('demo:pet', null)
-  const { data, error } = await sb!.from('pets').select('id,state').is('died_at', null).maybeSingle()
+  const { data, error } = await sb!.from('pets').select('id,state,updated_at').is('died_at', null).maybeSingle()
   if (error) throw new Error('펫을 불러오지 못했습니다')
   if (!data) return null
-  const pending = read<Pet | null>(pendingKey(data.id), null)
-  return { id: data.id, pet: pending ?? (data.state as Pet) }
+  const pending = read<Pending | null>(pendingKey(data.id), null)
+  const fresher = pending && pending.at > new Date(data.updated_at).getTime()
+  if (pending && !fresher) localStorage.removeItem(pendingKey(data.id))
+  return { id: data.id, pet: fresher ? pending.pet : (data.state as Pet) }
 }
 
 export async function createPet(pet: Pet): Promise<PetRow> {
@@ -109,9 +113,10 @@ export async function savePet({ id, pet }: PetRow): Promise<boolean> {
     } else write('demo:pet', { id, pet })
     return true
   }
-  write(pendingKey(id), pet)
+  const at = now()
+  write(pendingKey(id), { pet, at } satisfies Pending)
   const { error } = await sb!.from('pets').update({
-    state: pet, died_at: pet.diedAt ? iso(pet.diedAt) : null, death_cause: pet.deathCause, updated_at: iso(now()),
+    state: pet, died_at: pet.diedAt ? iso(pet.diedAt) : null, death_cause: pet.deathCause, updated_at: iso(at),
   }).eq('id', id)
   if (error) return false
   localStorage.removeItem(pendingKey(id))

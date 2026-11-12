@@ -75,9 +75,10 @@ async function syncMess(pet: Pet) {
   world.trash.position.y = pet.mess ? 0.75 : 0
 }
 
-function apply(pet: Pet) {
+/** 지금 상태를 화면에 반영한다 (저장하지 않는다) */
+function refresh() {
   if (!row || !actor) return
-  row.pet = pet
+  const pet = row.pet
   const t = data.now()
   const asleep = isAsleep(pet, t, tz)
   actor.asleep = asleep
@@ -87,9 +88,23 @@ function apply(pet: Pet) {
   hud?.update(pet, t, asleep)
   world.setLight(hourNow(), asleep && world.place === 'room')
   void syncMess(pet)
+}
+
+function apply(pet: Pet) {
+  if (!row || !actor) return
+  row.pet = pet
+  refresh()
   flushLog()
   scheduleSave()
   if (pet.diedAt) farewell()
+}
+
+/** 시간을 흘려보낸다. 10분 단위가 넘어가지 않았으면 저장하지 않는다 */
+function tick() {
+  if (!row || row.pet.diedAt) return
+  const next = advance(row.pet, data.now(), tz)
+  if (next !== row.pet) apply(next)
+  else refresh()
 }
 
 /** sim이 남긴 사건을 일기로 옮긴다 */
@@ -313,7 +328,7 @@ async function startWalk() {
       mode = 'idle'
       hud?.setMode(null)
       if (found > 0) doAct('walk')
-      else if (row) apply(row.pet)
+      else refresh()
     })
   }
 }
@@ -404,9 +419,14 @@ canvas.addEventListener('pointercancel', () => (down = null))
 
 // ── 흐름: 로그인 → 입양 → 함께 지내기 ─────────────────
 
+let actorSeq = 0
 async function setActor(species: string) {
+  const seq = ++actorSeq
+  const next = await Actor.create(world, species)
+  // 불러오는 사이 다른 친구를 골랐으면 이 모델은 버린다
+  if (seq !== actorSeq) return next.dispose()
   actor?.dispose()
-  actor = await Actor.create(world, species)
+  actor = next
   actor.root.position.set(0, 0, 1)
   actor.faceCamera()
   actor.hop()
@@ -484,7 +504,7 @@ async function play() {
   if (row && !row.pet.diedAt && away > 3600_000) hud?.toast(`${josa(row.pet.name, '이', '가')} 기다리고 있었어요`)
 
   clearInterval(tickTimer)
-  tickTimer = window.setInterval(() => row && !row.pet.diedAt && apply(advance(row.pet, data.now(), tz)), 20_000)
+  tickTimer = window.setInterval(tick, 20_000)
 }
 
 world.onFrame.push((dt) => {
@@ -496,7 +516,7 @@ world.onFrame.push((dt) => {
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && row && !row.pet.diedAt) void data.savePet(row)
-  else if (row && !row.pet.diedAt) apply(advance(row.pet, data.now(), tz))
+  else tick()
 })
 
 async function boot() {
@@ -526,6 +546,7 @@ async function boot() {
     const p = structuredClone(row.pet)
     const d = q.get('dbg')
     if (d === 'needy') { p.stats.full = 12; p.stats.clean = 20; p.poop = 2; p.mess = true; p.sick = 'cold' }
+    if (d === 'nap') { p.napping = true; p.stats.energy = 40 }
     if (d === 'dead') { p.diedAt = data.now(); p.deathCause = 'old' }
     apply(p)
   }
