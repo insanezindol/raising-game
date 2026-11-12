@@ -5,6 +5,7 @@ import { Actor } from './actor'
 import { prop } from './assets'
 import { sfx, startMusic } from './audio'
 import * as data from './data'
+import { catchWindow, discover, FINDS, greetingTier } from './rewards'
 import { act, advance, isAsleep, moodOf, newPet, stageOf, type Action, type Pet } from './sim'
 import { createHud, curtain, josa, showAdopt, showAuth, showDiary, showFarewell, SPECIES, type Food, type Hud } from './ui'
 import { World } from './world'
@@ -41,7 +42,6 @@ const REFUSE: Record<string, string> = {
   asleep: '자고 있어요. 톡 건드리면 깨울 수 있어요',
   notsleepy: '아직 졸리지 않대요',
 }
-const FINDS = ['네잎클로버', '반짝이는 조약돌', '도토리', '예쁜 낙엽', '나비', '민들레 씨앗', '달팽이']
 
 /** dur초 동안 매 프레임 fn(0→1)을 부른다 */
 function tween(dur: number, fn: (k: number) => void): Promise<void> {
@@ -111,7 +111,7 @@ function tick() {
 function flushLog() {
   if (!row || !row.pet.log.length) return
   for (const e of row.pet.log) {
-    void data.addDiary(row.id, e.kind, DIARY[e.kind] ?? e.kind, e.t)
+    void data.addDiary(row.id, e.kind, e.body ?? DIARY[e.kind] ?? e.kind, e.t)
     if (e.kind.startsWith('grow') || e.kind === 'sick') hud?.toast(DIARY[e.kind])
   }
   row.pet = { ...row.pet, log: [] }
@@ -180,37 +180,80 @@ const ball = new Mesh(new SphereGeometry(0.3, 20, 14), new MeshStandardMaterial(
 ball.castShadow = true
 ball.visible = false
 world.scene.add(ball)
+let tryCatch: (() => void) | null = null
 
 function startPlay() {
   if (!can('play')) return
   mode = 'play'
   let fetched = 0
-  hud?.setMode('바닥을 눌러 공을 던져 주세요')
-  endMode = () => { mode = 'idle'; ball.visible = false; hud?.setMode(null); endMode = null }
+  let combo = 0
+  const prompt = () => hud?.setMode(`바닥을 눌러 공 던지기 · ${fetched}/3`)
+  prompt()
+  const finish = () => {
+    mode = 'idle'
+    tryCatch = null
+    ball.visible = false
+    hud?.setCatch(null)
+    hud?.setMode(null)
+    endMode = null
+  }
+  endMode = finish
 
   throwBall = async (to: Vector3) => {
     if (!actor || actor.scripted || !can('play')) return
     await script(async (a) => {
+      hud?.setMode('펫이 공을 받을 준비를 해요')
+      await a.goTo(to.x, to.z, true)
+      if (endMode !== finish) return
       const from = new Vector3(to.x * 0.3, 2.5, 9)
       ball.removeFromParent()
       world.scene.add(ball)
       ball.visible = true
+      ball.material.color.set('#ff8f7a')
       sfx.pop()
-      a.faceTo(to.x, to.z)
-      await tween(0.7, (k) => ball.position.lerpVectors(from, to, k).setY(0.3 + Math.sin(k * Math.PI) * 3 + (1 - k) * 2.2))
-      await a.goTo(to.x, to.z, true)
-      a.hop()
-      a.root.add(ball) // 물고 온다
-      ball.position.set(0, 1.55, 0.5)
+      a.faceTo(from.x, from.z)
+      void a.play('idle')
+      let ready = false
+      let caught = false
+      const holdBall = () => {
+        a.root.add(ball)
+        ball.position.set(0, 1.55, 0.5)
+      }
+      hud?.setMode('공이 노랗게 빛날 때 눌러요')
+      hud?.setCatch('캐치')
+      tryCatch = () => {
+        caught = ready
+        tryCatch = null
+        hud?.setCatch(null)
+        if (caught) { a.hop(); holdBall(); sfx.chime() }
+      }
+      await tween(1.5, (k) => {
+        if (endMode !== finish || caught) return
+        ball.position.lerpVectors(from, to, k).setY(0.3 + Math.sin(k * Math.PI) * 3 + (1 - k) * 2.2)
+        if (ready === catchWindow(k)) return
+        ready = !ready
+        ball.material.color.set(ready ? '#ffd34e' : '#ff8f7a')
+        if (tryCatch) hud?.setCatch(ready ? '지금 캐치!' : '캐치')
+      })
+      if (endMode !== finish) return
+      tryCatch = null
+      hud?.setCatch(null)
+      hud?.setMode('공을 물고 돌아오는 중')
+      if (!caught) { a.hop(); holdBall() }
       await a.goTo(0, 2.4, true)
       a.faceCamera()
       ball.visible = false
-      doAct('play')
+      if (endMode !== finish || !doAct('play')) return
+      fetched++
+      combo = caught ? combo + 1 : 0
+      if (caught) hud?.toast(combo === 3 ? '완벽한 3연속 캐치!' : `공중 캐치 · ${combo}연속`)
       hud?.emote('heart')
       sfx.happy()
-      await a.play('gesture-positive', 0.2, true)
+      await a.play(combo === 3 ? 'dance' : 'gesture-positive', 0.2, true)
     })
-    if (++fetched >= 3 && mode === 'play') endMode?.()
+    if (endMode !== finish) return
+    if (fetched >= 3) finish()
+    else prompt()
   }
 }
 let throwBall: (to: Vector3) => void = () => {}
@@ -306,20 +349,30 @@ async function startWalk() {
       found++
       sfx.chime()
       a.hop()
-      hud?.toast(`${josa(FINDS[Math.floor(Math.random() * FINDS.length)], '을', '를')} 발견했어요`)
+      const item = FINDS[Math.floor(Math.random() * FINDS.length)]
+      const current = row?.pet
+      if (current && !current.diedAt) {
+        const next = discover(current, item, data.now())
+        if (next !== current) {
+          apply(next)
+          hud?.emote('heart')
+          hud?.toast(`도감 첫 등록 · ${item} (${next.discoveries!.length}/${FINDS.length})`)
+        } else hud?.toast(`${josa(item, '을', '를')} 발견했어요`)
+      }
       label()
-      if (found === 5) setTimeout(() => mode === 'walk' && endMode?.(), 1400)
+      if (found === 5) setTimeout(() => { if (endMode === finish) finish() }, 1400)
     }
   }
   world.onFrame.push(watch)
   walkTo = (p) => void a.goTo(p.x, p.z, false).then(() => a.play('idle'))
 
-  endMode = () => {
+  const finish = () => {
     endMode = null
     walkTo = () => {}
     world.onFrame.splice(world.onFrame.indexOf(watch), 1)
     void curtain('집으로 돌아가는 중', 'home', () => {
       spots.forEach((s) => s.removeFromParent())
+      glow.dispose()
       a.stop()
       world.setPlace('room')
       a.root.position.set(0, 0, 1)
@@ -331,6 +384,7 @@ async function startWalk() {
       else refresh()
     })
   }
+  endMode = finish
 }
 let walkTo: (p: Vector3) => void = () => {}
 
@@ -389,6 +443,7 @@ canvas.addEventListener('pointerup', (e) => {
   const d = down
   down = null
   if (!d || d.moved > 12 || !actor || !row) return
+  if (mode === 'play' && tryCatch) return tryCatch()
   const ground = world.groundPoint(e.clientX, e.clientY)
 
   if (mode === 'play') return ground && !d.onPet ? throwBall(ground) : undefined
@@ -442,7 +497,7 @@ async function adopt() {
 
 async function openDiary() {
   const [entries, memorial] = await Promise.all([row ? data.loadDiary(row.id) : [], data.loadMemorial()])
-  showDiary(row?.pet.name ?? null, entries, memorial.filter((m) => m.id !== row?.id))
+  showDiary(row?.pet.name ?? null, entries, memorial.filter((m) => m.id !== row?.id), row?.pet.discoveries ?? [])
 }
 
 function farewell() {
@@ -475,6 +530,7 @@ async function play() {
 
   hud = createHud({
     action(name) {
+      if (actor?.scripted) return
       if (name === 'feed') {
         if (mode === 'feed') { mode = 'idle'; return hud?.setMode(null) }
         if (mode !== 'idle' || !can('feed')) return
@@ -490,6 +546,7 @@ async function play() {
     },
     food: (f) => void feed(f),
     stop: () => endMode?.(),
+    catchBall: () => tryCatch?.(),
     diary: () => void openDiary(),
     logout: async () => {
       if (row) await data.savePet(row)
@@ -501,7 +558,24 @@ async function play() {
   // 자리를 비운 동안 흐른 시간을 따라잡는다
   const away = data.now() - row.pet.tickAt
   apply(advance(row.pet, data.now(), tz))
-  if (row && !row.pet.diedAt && away > 3600_000) hud?.toast(`${josa(row.pet.name, '이', '가')} 기다리고 있었어요`)
+  if (!row.pet.diedAt && away > 3600_000) {
+    const name = josa(row.pet.name, '이', '가')
+    const tier = greetingTier(row.pet.stats.love)
+    if (!tier || actor?.asleep || actor?.sick) {
+      hud?.toast(`${name} 기다리고 있었어요`)
+    } else {
+      void script(async (a) => {
+        await a.goTo(0, 2.4, tier === 2)
+        if (a !== actor || row?.pet.diedAt) return
+        a.faceCamera()
+        a.hop()
+        hud?.emote('heart')
+        hud?.toast(tier === 2 ? `${name} 달려와 반겨요!` : `${name} 가까이 와서 반겨요`)
+        sfx.happy()
+        await a.play(tier === 2 ? 'dance' : 'gesture-positive', 0.2, true)
+      })
+    }
+  }
 
   clearInterval(tickTimer)
   tickTimer = window.setInterval(tick, 20_000)

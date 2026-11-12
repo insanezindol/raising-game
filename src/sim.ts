@@ -19,7 +19,8 @@ export type Pet = {
   napping: boolean
   awakeUntil: number
   counts: Record<string, number>
-  log: { t: number; kind: string }[]
+  discoveries?: string[]
+  log: { t: number; kind: string; body?: string }[]
   tickAt: number
 }
 

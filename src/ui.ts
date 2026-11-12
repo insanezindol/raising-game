@@ -2,6 +2,7 @@
 import { isMuted, setMuted, sfx } from './audio'
 import type { DiaryEntry, Memorial } from './data'
 import { icon } from './icons'
+import { FINDS } from './rewards'
 import { ageDays, personalityOf, stageOf, type Pet, type Stats } from './sim'
 
 type Child = Node | string | null | undefined | false
@@ -204,6 +205,7 @@ export type HudHandlers = {
   action(name: 'feed' | 'play' | 'walk' | 'bath' | 'sleep' | 'hospital'): void
   food(food: Food): void
   stop(): void
+  catchBall(): void
   diary(): void
   logout(): void
 }
@@ -252,7 +254,9 @@ export function createHud(on: HudHandlers) {
     }))
 
   const hintText = h('span', {})
-  const hint = h('div', { class: 'hintbar', hidden: true }, hintText, button('그만하기', on.stop))
+  const catchBtn = button('캐치', on.catchBall, 'catch-ball')
+  catchBtn.hidden = true
+  const hint = h('div', { class: 'hintbar', hidden: true }, hintText, catchBtn, button('그만하기', on.stop))
   const toastEl = h('p', { class: 'toast', role: 'status', hidden: true })
   const bubble = h('div', { class: 'bubble', hidden: true })
   const el = h('div', { class: 'hud' }, status, menu, toastEl, bubble, tray, actions, hint)
@@ -296,6 +300,11 @@ export function createHud(on: HudHandlers) {
       hintText.textContent = text ?? ''
     },
     setOffline(v: boolean) { offline.hidden = !v },
+    setCatch(label: string | null) {
+      catchBtn.hidden = !label
+      if (label) catchBtn.textContent = label
+      catchBtn.classList.toggle('ready', label === '지금 캐치!')
+    },
     remove() { el.remove() },
   }
 }
@@ -319,7 +328,7 @@ const dateText = (iso: string) => {
 const livedDays = (m: { born_at: string; died_at: string }) =>
   Math.max(1, Math.round((new Date(m.died_at).getTime() - new Date(m.born_at).getTime()) / 86_400_000))
 
-export function showDiary(petName: string | null, entries: DiaryEntry[], memorial: Memorial[]) {
+export function showDiary(petName: string | null, entries: DiaryEntry[], memorial: Memorial[], discoveries: string[]) {
   const close = () => el.remove()
   const el = h('div', { class: 'veil', click: (e: Event) => e.target === el && close() },
     h('article', { class: 'notebook', role: 'dialog', 'aria-label': '일기' },
@@ -328,6 +337,9 @@ export function showDiary(petName: string | null, entries: DiaryEntry[], memoria
       petName && (entries.length
         ? h('ol', {}, ...[...entries].reverse().map((e) => h('li', {}, h('time', {}, dateText(e.created_at)), e.body)))
         : h('p', {}, '아직 적힌 일기가 없어요. 함께 지내다 보면 채워져요.')),
+      petName && h('h2', {}, `산책 도감 ${discoveries.length}/${FINDS.length}`),
+      petName && h('ul', {}, ...FINDS.map((item, i) =>
+        h('li', {}, discoveries.includes(item) ? item : `아직 발견하지 못했어요 (${i + 1}번)`))),
       memorial.length > 0 && h('h2', {}, '먼저 떠난 친구들'),
       memorial.length > 0 && h('ul', {}, ...memorial.map((m) =>
         h('li', {}, h('time', {}, dateText(m.died_at)), `${speciesName(m.species)} ${m.name}, ${livedDays(m)}일을 함께했다.`)))))

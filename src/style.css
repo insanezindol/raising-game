@@ -149,6 +149,8 @@ form { display: grid; gap: 10px; }
   padding: 6px 6px 6px 16px; display: flex; gap: 12px; align-items: center; font-family: var(--hand); font-size: 1.25rem; font-weight: 700;
 }
 .hintbar .btn { box-shadow: none; font-family: var(--ui); font-size: 0.95rem; font-weight: 400; background: var(--coral); white-space: nowrap; }
+.hintbar .catch-ball { min-width: 5.5rem; background: #fff; }
+.hintbar .catch-ball.ready { background: #ffd34e; color: #432e16; }
 
 /* 장소 이동 덮개 */
 .curtain { position: absolute; inset: 0; background: var(--mint); display: grid; place-items: center; z-index: 9; pointer-events: auto; animation: wipe-in 0.36s ease-out both; }
