@@ -276,6 +276,10 @@ export function createHud(on: HudHandlers) {
       }
       detail.textContent = `성격: ${personalityOf(pet)}${pet.sick ? ' / 아파요' : ''}`
       sleepBtn.replaceChildren(icon(asleep ? 'sun' : 'moon'), h('span', {}, asleep ? '깨우기' : '재우기'))
+      // 급한 돌봄 버튼을 반짝여 알려준다 (배변·말썽은 버튼이 아니라 바닥을 눌러 치운다)
+      const st = pet.stats
+      const need = { feed: st.full < 30, bath: st.clean < 30, sleep: st.energy < 20 && !asleep, play: st.fun < 30 && st.energy >= 15 && !pet.sick, hospital: !!pet.sick }
+      for (const b of actions.children) b.classList.toggle('need', need[b.classList[1] as keyof typeof need] ?? false)
     },
     toast(text: string) {
       toastEl.textContent = text

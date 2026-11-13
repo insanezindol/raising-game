@@ -1,11 +1,11 @@
 // 게임 본체: 규칙(sim), 무대(world), 펫(actor), UI, 저장(data)을 잇는다.
 import './style.css'
-import { Mesh, MeshStandardMaterial, SphereGeometry, TorusGeometry, Vector3, type Object3D } from 'three'
+import { Mesh, MeshStandardMaterial, OctahedronGeometry, SphereGeometry, TorusGeometry, Vector3, type Object3D } from 'three'
 import { Actor } from './actor'
 import { prop } from './assets'
 import { sfx, startMusic } from './audio'
 import * as data from './data'
-import { catchWindow, discover, FINDS, greetingTier } from './rewards'
+import { catchBonus, catchWindow, discover, FINDS, greetingTier } from './rewards'
 import { act, advance, isAsleep, moodOf, newPet, stageOf, type Action, type Pet } from './sim'
 import { createHud, curtain, josa, showAdopt, showAuth, showDiary, showFarewell, SPECIES, type Food, type Hud } from './ui'
 import { World } from './world'
@@ -41,6 +41,21 @@ const REFUSE: Record<string, string> = {
   sick: '아파서 움직이기 힘들어해요. 병원에 가 볼까요?',
   asleep: '자고 있어요. 톡 건드리면 깨울 수 있어요',
   notsleepy: '아직 졸리지 않대요',
+  clean: '이미 깨끗해요',
+}
+
+/** 지금 돌봐야 할 것들. 급한 것부터 */
+function needs(p: Pet): string[] {
+  const s = p.stats
+  return [
+    !!p.sick && '아파 보여요. 병원에 데려가 주세요',
+    s.health < 30 && '건강이 위험해요! 어서 돌봐 주세요',
+    s.full < 30 && '배가 고프대요',
+    (p.poop > 0 || p.mess) && '바닥에 흔적이 생겼어요. 톡 눌러 치워 주세요',
+    s.clean < 30 && '씻고 싶어해요',
+    s.energy < 20 && '졸려 해요',
+    s.fun < 30 && '심심해해요',
+  ].filter((n): n is string => !!n)
 }
 
 /** dur초 동안 매 프레임 fn(0→1)을 부른다 */
@@ -56,11 +71,38 @@ function tween(dur: number, fn: (k: number) => void): Promise<void> {
   })
 }
 
+const sparkGeo = new OctahedronGeometry(0.1)
+/** 반짝이를 사방으로 터뜨린다 (치우기·목욕·캐치·발견·성장) */
+function sparkle(at: Vector3, color = '#ffd34e', n = 12) {
+  const mat = new MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.8, transparent: true })
+  const bits = Array.from({ length: n }, (_, i) => {
+    const m = new Mesh(sparkGeo, mat)
+    const a = (i / n) * Math.PI * 2 + Math.random() * 0.4
+    m.userData.v = new Vector3(Math.cos(a) * 1.8, 3 + Math.random() * 2, Math.sin(a) * 1.8)
+    world.scene.add(m)
+    return m
+  })
+  void tween(0.9, (k) => {
+    const t = k * 0.9
+    for (const m of bits) {
+      const v: Vector3 = m.userData.v
+      m.position.set(at.x + v.x * t, at.y + v.y * t - 6 * t * t, at.z + v.z * t)
+      m.rotation.set(k * 7, k * 5, 0)
+      m.scale.setScalar(1 - k * 0.7)
+    }
+    mat.opacity = 1 - k * k
+  }).then(() => { bits.forEach((m) => m.removeFromParent()); mat.dispose() })
+}
+const petTop = (a: Actor) => a.root.position.clone().setY(1.2 * a.root.children[0].scale.y)
+
 // ── 상태 반영 ─────────────────────────────────────────
 
 const poops: Object3D[] = []
+let messQueue = Promise.resolve()
+// 모델을 불러오는 사이 다음 refresh가 겹치면 똥이 더 생기므로 한 번에 하나씩 맞춘다
+const syncMess = (pet: Pet) => { messQueue = messQueue.then(() => placeMess(pet)).catch(console.error) }
 
-async function syncMess(pet: Pet) {
+async function placeMess(pet: Pet) {
   while (poops.length > pet.poop) poops.pop()!.removeFromParent()
   while (poops.length < pet.poop) {
     const o = await prop('park/rock_smallA', 1.5)
@@ -87,7 +129,7 @@ function refresh() {
   actor.setStage(stageOf(pet, t))
   hud?.update(pet, t, asleep)
   world.setLight(hourNow(), asleep && world.place === 'room')
-  void syncMess(pet)
+  syncMess(pet)
 }
 
 function apply(pet: Pet) {
@@ -103,8 +145,12 @@ function apply(pet: Pet) {
 function tick() {
   if (!row || row.pet.diedAt) return
   const next = advance(row.pet, data.now(), tz)
-  if (next !== row.pet) apply(next)
-  else refresh()
+  if (next === row.pet) return refresh()
+  const before = needs(row.pet)
+  const fresh = needs(next).find((n) => !before.includes(n))
+  // 성장·병 알림이 함께 오면 apply의 일기 알림이 이 알림을 덮는다
+  if (fresh) hud?.toast(fresh)
+  apply(next)
 }
 
 /** sim이 남긴 사건을 일기로 옮긴다 */
@@ -113,6 +159,7 @@ function flushLog() {
   for (const e of row.pet.log) {
     void data.addDiary(row.id, e.kind, e.body ?? DIARY[e.kind] ?? e.kind, e.t)
     if (e.kind.startsWith('grow') || e.kind === 'sick') hud?.toast(DIARY[e.kind])
+    if (e.kind.startsWith('grow') && actor) { sparkle(petTop(actor), '#ff9ec7', 22); actor.hop() }
   }
   row.pet = { ...row.pet, log: [] }
 }
@@ -200,7 +247,8 @@ function startPlay() {
   endMode = finish
 
   throwBall = async (to: Vector3) => {
-    if (!actor || actor.scripted || !can('play')) return
+    if (!actor || actor.scripted) return
+    if (!can('play')) return finish()
     await script(async (a) => {
       hud?.setMode('펫이 공을 받을 준비를 해요')
       await a.goTo(to.x, to.z, true)
@@ -225,7 +273,7 @@ function startPlay() {
         caught = ready
         tryCatch = null
         hud?.setCatch(null)
-        if (caught) { a.hop(); holdBall(); sfx.chime() }
+        if (caught) { sparkle(ball.getWorldPosition(new Vector3())); a.hop(); holdBall(); sfx.chime() }
       }
       await tween(1.5, (k) => {
         if (endMode !== finish || caught) return
@@ -245,6 +293,7 @@ function startPlay() {
       ball.visible = false
       if (endMode !== finish || !doAct('play')) return
       fetched++
+      if (caught && row) apply(catchBonus(row.pet))
       combo = caught ? combo + 1 : 0
       if (caught) hud?.toast(combo === 3 ? '완벽한 3연속 캐치!' : `공중 캐치 · ${combo}연속`)
       hud?.emote('heart')
@@ -291,6 +340,7 @@ function startBath() {
     hud?.setMode(null)
     if (!washed) return
     doAct('bath')
+    sparkle(petTop(a), '#bfe3f7', 18)
     sfx.chime()
     hud?.toast('뽀송뽀송해졌어요')
     a.hop()
@@ -346,6 +396,7 @@ async function startWalk() {
       if (s.position.distanceTo(a.root.position) > 1) continue
       spots.splice(spots.indexOf(s), 1)
       s.removeFromParent()
+      sparkle(s.position)
       found++
       sfx.chime()
       a.hop()
@@ -453,7 +504,12 @@ canvas.addEventListener('pointerup', (e) => {
   // 치우기: 배변이나 엎어진 쓰레기통을 누른다
   const dirty = [...poops, ...(row.pet.mess ? [world.trash] : [])].some((o) => world.hits(e.clientX, e.clientY, o))
   if (dirty) {
-    if (doAct('tidy')) { sfx.chime(); hud?.toast('깨끗하게 치웠어요') }
+    const spots = [...poops, ...(row.pet.mess ? [world.trash] : [])].map((o) => o.getWorldPosition(new Vector3()).setY(0.4))
+    if (doAct('tidy')) {
+      spots.forEach((p) => sparkle(p, '#9be7c4', 8))
+      sfx.chime()
+      hud?.toast('깨끗하게 치웠어요')
+    }
     return
   }
   if (d.onPet) {
@@ -560,9 +616,11 @@ async function play() {
   apply(advance(row.pet, data.now(), tz))
   if (!row.pet.diedAt && away > 3600_000) {
     const name = josa(row.pet.name, '이', '가')
+    const need = needs(row.pet)[0]
+    const say = (text: string) => hud?.toast(need ? `${text} · ${need}` : text)
     const tier = greetingTier(row.pet.stats.love)
     if (!tier || actor?.asleep || actor?.sick) {
-      hud?.toast(`${name} 기다리고 있었어요`)
+      say(`${name} 기다리고 있었어요`)
     } else {
       void script(async (a) => {
         await a.goTo(0, 2.4, tier === 2)
@@ -570,7 +628,7 @@ async function play() {
         a.faceCamera()
         a.hop()
         hud?.emote('heart')
-        hud?.toast(tier === 2 ? `${name} 달려와 반겨요!` : `${name} 가까이 와서 반겨요`)
+        say(tier === 2 ? `${name} 달려와 반겨요!` : `${name} 가까이 와서 반겨요`)
         sfx.happy()
         await a.play(tier === 2 ? 'dance' : 'gesture-positive', 0.2, true)
       })
@@ -586,6 +644,13 @@ world.onFrame.push((dt) => {
   actor.update(dt)
   const head = world.screen(actor.root.position.clone().add(new Vector3(0, 1.75 * actor.root.children[0].scale.y, 0)))
   hud?.placeBubble(head.x, head.y)
+})
+
+// Esc: 하던 놀이·목욕·산책을 그만두거나 먹이 고르기를 닫는다
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !hud) return
+  if (endMode) endMode()
+  else if (mode === 'feed') { mode = 'idle'; hud.setMode(null) }
 })
 
 document.addEventListener('visibilitychange', () => {

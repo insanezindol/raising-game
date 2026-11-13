@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { catchWindow, discover, FINDS, greetingTier } from './rewards'
+import { catchBonus, catchWindow, discover, FINDS, greetingTier } from './rewards'
 import { newPet } from './sim'
 
 describe('펫과 함께 얻는 보상', () => {
@@ -15,6 +15,14 @@ describe('펫과 함께 얻는 보상', () => {
     expect(first.log).toEqual([{ t: 100, kind: 'discovery', body: '첫 발견 · 네잎클로버' }])
     expect(old.discoveries).toBeUndefined()
     expect(discover(first, FINDS[0], 200)).toBe(first)
+  })
+
+  it('공중 캐치는 즐거움과 애정을 조금 더 주되 100을 넘지 않는다', () => {
+    const p = newPet('dog', '콩이', 0)
+    const q = catchBonus(p)
+    expect(q.stats.love).toBe(21)
+    expect(q.stats.fun).toBe(100)
+    expect(p.stats.love).toBe(20)
   })
 
   it('애정도 기준에서 새 재회 행동을 해금한다', () => {

@@ -44,6 +44,8 @@ export class World {
   private ray = new Raycaster()
   private ground = new Plane(new Vector3(0, 1, 0), 0)
   private sky = new Color()
+  /** setLight가 정한 목표. frame에서 천천히 따라가 빛이 툭 바뀌지 않게 한다 */
+  private want = { sky: new Color('#bfe3f7'), hemi: 1.5, sunColor: new Color('#fff4e0'), sun: 2.2, lamp: 0 }
   private last = performance.now()
 
   constructor(canvas: HTMLCanvasElement) {
@@ -58,6 +60,7 @@ export class World {
     sc.left = sc.bottom = -16; sc.right = sc.top = 16; sc.far = 60
     this.sun.shadow.bias = -0.0005
     this.sun.shadow.normalBias = 0.04
+    this.sun.shadow.radius = 4 // 그림자 가장자리를 부드럽게
     this.lamp.position.set(-4.3, 3.6, -4.4)
     this.scene.add(this.hemi, this.sun, this.sun.target, this.lamp)
 
@@ -169,13 +172,25 @@ export class World {
   setLight(hour: number, lightsOut: boolean) {
     const phase = lightsOut ? 'dark' : hour >= 7 && hour < 17 ? 'day' : hour >= 17 && hour < 20 ? 'dusk' : 'night'
     const [sky, hemi, sunColor, sun] = LIGHT[phase]
-    this.sky.set(sky)
-    this.scene.background = this.sky
-    this.hemi.intensity = hemi
-    this.sun.color.set(sunColor)
-    this.sun.intensity = sun
+    const w = this.want
+    w.sky.set(sky)
+    w.hemi = hemi
+    w.sunColor.set(sunColor)
+    w.sun = sun
     // 밤에는 방 스탠드를 켠다
-    this.lamp.intensity = phase === 'night' && this.place === 'room' ? 60 : phase === 'dusk' && this.place === 'room' ? 25 : 0
+    w.lamp = phase === 'night' && this.place === 'room' ? 60 : phase === 'dusk' && this.place === 'room' ? 25 : 0
+  }
+
+  private fadeLight(dt: number) {
+    const k = 1 - Math.exp(-2.5 * dt)
+    const w = this.want
+    this.sky.lerp(w.sky, k)
+    this.scene.background = this.sky
+    if (this.scene.fog) this.scene.fog.color.copy(this.sky)
+    this.hemi.intensity = MathUtils.lerp(this.hemi.intensity, w.hemi, k)
+    this.sun.color.lerp(w.sunColor, k)
+    this.sun.intensity = MathUtils.lerp(this.sun.intensity, w.sun, k)
+    this.lamp.intensity = MathUtils.lerp(this.lamp.intensity, w.lamp, k)
   }
 
   private resize() {
@@ -193,6 +208,7 @@ export class World {
     const dt = Math.min((t - this.last) / 1000, 0.1)
     this.last = t
     for (const f of this.onFrame) f(dt)
+    this.fadeLight(dt)
 
     const a = AREAS[this.place]
     const target = this.follow ? new Vector3(this.follow.position.x, 0, this.follow.position.z * 0.5) : new Vector3(a.cx, 0, 0)

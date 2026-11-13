@@ -1,5 +1,7 @@
 import type { Pet } from './sim'
 
+const cap = (v: number) => Math.min(100, v)
+
 export const FINDS = ['네잎클로버', '반짝이는 조약돌', '도토리', '예쁜 낙엽', '나비', '민들레 씨앗', '달팽이'] as const
 
 export const catchWindow = (progress: number) => progress >= 0.68 && progress < 0.96
@@ -15,3 +17,7 @@ export function discover(pet: Pet, item: (typeof FINDS)[number], now: number): P
     log: [...pet.log, { t: now, kind: 'discovery', body: `첫 발견 · ${item}` }],
   }
 }
+
+/** 공중에서 받아낸 공: 놀이 효과에 조금 더 얹어 준다 */
+export const catchBonus = (pet: Pet): Pet =>
+  ({ ...pet, stats: { ...pet.stats, fun: cap(pet.stats.fun + 5), love: cap(pet.stats.love + 1) } })

@@ -30,6 +30,8 @@ export class Actor {
   private t = Math.random() * 10
   private hopT = 1
   private size = 1
+  private wantSize = 1
+  private sized = false
 
   private constructor(private world: World, model: Group, clips: AnimationClip[]) {
     this.squash.add(model)
@@ -100,11 +102,14 @@ export class Actor {
 
   setStage(stage: Stage) {
     this.stage = stage
-    this.size = STAGE_SCALE[stage]
+    this.wantSize = STAGE_SCALE[stage]
+    // 처음 한 번은 바로 맞추고, 그 뒤 성장은 천천히 자란다
+    if (!this.sized) { this.size = this.wantSize; this.sized = true }
   }
 
   update(dt: number) {
     this.t += dt
+    this.size = MathUtils.lerp(this.size, this.wantSize, 1 - Math.exp(-1.2 * dt))
     this.mixer.timeScale = this.sick ? 0.6 : this.stage === 'baby' ? 1.25 : 1
     this.mixer.update(dt)
     const pos = this.root.position

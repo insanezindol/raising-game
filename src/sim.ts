@@ -20,6 +20,8 @@ export type Pet = {
   awakeUntil: number
   counts: Record<string, number>
   discoveries?: string[]
+  /** 쓰다듬기로 애정이 마지막으로 오른 시각 (예전 저장에는 없다) */
+  lovedAt?: number
   log: { t: number; kind: string; body?: string }[]
   tickAt: number
 }
@@ -149,6 +151,7 @@ export function act(
       if (first && action === 'walk') p.log.push({ t: now, kind: 'first-walk' })
       break
     case 'bath':
+      if (s.clean > 90) return no('clean')
       s.clean = 100; s.fun -= 5
       break
     case 'sleep':
@@ -170,7 +173,9 @@ export function act(
       p.poop = 0; p.mess = false
       break
     case 'pet':
-      s.love += 0.5; s.fun += 0.3
+      s.fun += 0.3
+      // 문지르기만으로 애정을 채우지 못하게, 애정은 30초에 한 번만 오른다
+      if (now - (p.lovedAt ?? 0) >= 30_000) { s.love += 0.5; p.lovedAt = now }
       if (p.counts.pet === 99) p.log.push({ t: now, kind: 'pet-100' })
       break
   }

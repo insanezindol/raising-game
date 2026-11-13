@@ -147,6 +147,21 @@ describe('act', () => {
     expect(p.mess).toBe(false)
   })
 
+  it('이미 깨끗하면 목욕을 거부한다', () => {
+    expect(act(fresh(), 'bath', NOON).reason).toBe('clean')
+    const p = fresh()
+    p.stats.clean = 50
+    expect(act(p, 'bath', NOON).pet.stats.clean).toBe(100)
+  })
+
+  it('쓰다듬기 애정은 30초에 한 번만 오른다', () => {
+    let p = fresh()
+    for (let i = 0; i < 50; i++) p = act(p, 'pet', NOON).pet
+    expect(p.stats.love).toBe(20.5)
+    expect(p.counts.pet).toBe(50)
+    expect(act(p, 'pet', NOON + 30_000).pet.stats.love).toBe(21)
+  })
+
   it('기분은 가장 급한 문제를 알려준다', () => {
     const p = fresh()
     expect(moodOf(p)).toBe('happy')
